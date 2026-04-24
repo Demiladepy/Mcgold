@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: solana-intel-mcp
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: NODE_ENV
+        value: production
+      - key: ALLOWED_HOSTS
+        sync: false
+      - key: GOLDRUSH_API_KEY
+        sync: false
+      - key: HELIUS_API_KEY
+        sync: false
+      - key: MCPAY_RECIPIENT_WALLET
+        sync: false

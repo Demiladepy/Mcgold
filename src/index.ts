@@ -6,10 +6,26 @@ import { createSolanaIntelMcpServer } from "./mcp-server.js";
 import { runWithHttpContext } from "./payment.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
+const allowedHosts = (process.env.ALLOWED_HOSTS ?? "localhost,127.0.0.1,[::1]")
+  .split(",")
+  .map((host) => host.trim())
+  .filter(Boolean);
 
 const app = createMcpExpressApp({
   host: "0.0.0.0",
-  allowedHosts: ["localhost", "127.0.0.1", "[::1]"],
+  allowedHosts,
+});
+
+app.get("/", (_req, res) => {
+  res.status(200).json({
+    status: "ok",
+    service: "solana-intel-mcp",
+    endpoints: ["/mcp", "/healthz"],
+  });
+});
+
+app.get("/healthz", (_req, res) => {
+  res.status(200).json({ ok: true });
 });
 
 app.post("/mcp", async (req, res) => {
