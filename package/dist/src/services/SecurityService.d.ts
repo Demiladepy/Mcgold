@@ -1,0 +1,22 @@
+import { type Execution } from "../utils/functions/execution";
+import { type Chain, type GoldRushResponse } from "../utils/types/Generic.types";
+import { type ApprovalsResponse } from "../utils/types/SecurityService.types";
+/**
+ * Approvals API
+ *
+ */
+export declare class SecurityService {
+    private execution;
+    constructor(execution: Execution);
+    /**
+     *
+     * Commonly used to get a list of approvals across all token contracts categorized by spenders for a wallet’s assets.
+     *
+     * **Credit Cost**: 2 per call
+     *
+     * @param {Chain} chainName - The chain name eg: `eth-mainnet` or 1.
+     * @param {string} walletAddress - The requested address. Passing in an `ENS`, `RNS`, `Lens Handle`, or an `Unstoppable Domain` resolves automatically.
+     *
+     */
+    getApprovals(chainName: Chain, walletAddress: string): Promise<GoldRushResponse<ApprovalsResponse>>;
+}

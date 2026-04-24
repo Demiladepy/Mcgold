@@ -1,0 +1,7 @@
+node_modules
+.env
+.env.*
+mcpay-agent.json
+mcpay-agent.base58
+*.secret
+.cursor/mcp.json

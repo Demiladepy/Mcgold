@@ -1,0 +1,119 @@
+import "dotenv/config";
+import { readFile } from "node:fs/promises";
+import bs58 from "bs58";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { withX402Client } from "mcpay/client";
+import { createSigner, type PaymentRequirements } from "x402/types";
+
+const log = (msg: string, data?: unknown) => {
+  const ts = new Date().toISOString();
+  if (data === undefined) {
+    console.log(`[${ts}] ${msg}`);
+  } else {
+    console.log(`[${ts}] ${msg}`, data);
+  }
+};
+
+async function loadSvmSignerFromKeypairPath(path: string) {
+  const raw = await readFile(path, "utf8");
+  const arr = JSON.parse(raw) as number[];
+  if (!Array.isArray(arr) || (arr.length !== 64 && arr.length !== 32)) {
+    throw new Error(
+      `Invalid keypair JSON at ${path}: expected array length 32 or 64`
+    );
+  }
+  const secretKeyBytes = Uint8Array.from(arr);
+  const secretKeyBase58 = bs58.encode(secretKeyBytes);
+  return createSigner("solana-devnet", secretKeyBase58);
+}
+
+async function main(): Promise<void> {
+  const startedAt = Date.now();
+  const keypairPath = process.env.MCPAY_KEYPAIR_PATH?.trim();
+  if (!keypairPath) {
+    throw new Error("Missing MCPAY_KEYPAIR_PATH in environment");
+  }
+
+  log("Loading Solana devnet signer from keypair file", { keypairPath });
+  const svmSigner = await loadSvmSignerFromKeypairPath(keypairPath);
+  log("Signer loaded");
+
+  const url = new URL("http://localhost:3100/");
+  const transport = new StreamableHTTPClientTransport(url, {
+    requestInit: {
+      headers: {
+        Accept: "application/json, text/event-stream",
+      },
+    },
+  });
+
+  const baseClient = new Client(
+    { name: "mcpay-test-client", version: "1.0.0" },
+    { capabilities: {} }
+  );
+
+  log("Connecting MCP client");
+  await baseClient.connect(transport as Transport);
+  log("Connected to MCP server", { endpoint: url.toString() });
+
+  log("Listing tools");
+  const listed = await baseClient.listTools();
+  log(
+    "Tools available",
+    listed.tools.map((t) => t.name)
+  );
+
+  log("Initial unpaid call to ping-paid (expect payment-required error)");
+  const unpaid = await baseClient.callTool({ name: "ping-paid", arguments: {} });
+  const x402Meta = unpaid._meta?.["x402/error"] as
+    | { accepts?: PaymentRequirements[]; error?: string }
+    | undefined;
+  if (!unpaid.isError || !x402Meta?.accepts?.length) {
+    throw new Error(
+      `Expected payment-required error on unpaid call, got: ${JSON.stringify(unpaid)}`
+    );
+  }
+  log("402-style payment requirement received", {
+    reason: x402Meta.error ?? "PAYMENT_REQUIRED",
+    options: x402Meta.accepts.map((a) => ({
+      network: a.network,
+      maxAmountRequired: a.maxAmountRequired,
+      asset: a.asset,
+      payTo: a.payTo,
+    })),
+  });
+
+  const paidClient = withX402Client(baseClient, {
+    wallet: { svm: svmSigner },
+    confirmationCallback: async (requirements: PaymentRequirements[]) => {
+      log("Payment prompt received; approving payment", {
+        requirements: requirements.map((r) => ({
+          network: r.network,
+          maxAmountRequired: r.maxAmountRequired,
+          asset: r.asset,
+          payTo: r.payTo,
+        })),
+      });
+      return true;
+    },
+  });
+
+  log("Calling ping-paid with MCPay auto-pay wrapper");
+  const paid = await paidClient.callTool({ name: "ping-paid", arguments: {} });
+  if (paid.isError) {
+    throw new Error(`Paid call failed: ${JSON.stringify(paid)}`);
+  }
+  log("Payment submitted and confirmed; received final tool response", paid);
+
+  const elapsedMs = Date.now() - startedAt;
+  log("Flow complete", { elapsedMs });
+
+  await baseClient.close();
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

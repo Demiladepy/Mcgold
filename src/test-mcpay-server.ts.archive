@@ -1,0 +1,68 @@
+import "dotenv/config";
+import { serve } from "@hono/node-server";
+import { Hono } from "hono";
+import { createMcpPaidHandler } from "mcpay/handler";
+import { z } from "zod";
+
+const PORT = 3100;
+const recipient = process.env.MCPAY_RECIPIENT_WALLET?.trim();
+
+if (!recipient) {
+  throw new Error("Missing MCPAY_RECIPIENT_WALLET in environment");
+}
+
+const handler = createMcpPaidHandler(
+  (server) => {
+    server.paidTool(
+      "ping-paid",
+      "Paid ping tool for MCPay validation.",
+      "$0.01",
+      {},
+      {},
+      async () => {
+        const payload = {
+          success: true,
+          timestamp: new Date().toISOString(),
+          message: "payment confirmed",
+        };
+        return {
+          content: [{ type: "text", text: JSON.stringify(payload) }],
+          structuredContent: payload,
+        };
+      }
+    );
+  },
+  {
+    facilitator: {
+      url: "https://facilitator.mcpay.tech",
+    },
+    recipient: {
+      svm: { address: recipient, isTestnet: true },
+    },
+  },
+  {
+    serverInfo: { name: "mcpay-test-server", version: "1.0.0" },
+  },
+  {
+    verboseLogs: true,
+    streamableHttpEndpoint: "/",
+  }
+);
+
+const app = new Hono();
+app.use("*", async (c) => {
+  console.log("[test-mcpay-server] request", {
+    method: c.req.method,
+    path: c.req.path,
+    headers: Object.fromEntries(c.req.raw.headers.entries()),
+  });
+  try {
+    return await handler(c.req.raw);
+  } catch (err) {
+    console.error("[test-mcpay-server] handler error", err);
+    return c.json({ error: String(err) }, 500);
+  }
+});
+
+serve({ fetch: app.fetch, port: PORT });
+console.log(`[test-mcpay-server] MCPay test server listening on http://localhost:${PORT}/`);
