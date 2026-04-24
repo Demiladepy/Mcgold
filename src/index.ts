@@ -6,10 +6,25 @@ import { createSolanaIntelMcpServer } from "./mcp-server.js";
 import { runWithHttpContext } from "./payment.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
-const allowedHosts = (process.env.ALLOWED_HOSTS ?? "localhost,127.0.0.1,[::1]")
+const defaultAllowedHosts = [
+  "localhost",
+  "localhost:3000",
+  "127.0.0.1",
+  "127.0.0.1:3000",
+  "[::1]",
+  "[::1]:3000",
+  "mcgold.onrender.com",
+];
+const envAllowedHosts = (process.env.ALLOWED_HOSTS ?? "")
   .split(",")
   .map((host) => host.trim())
   .filter(Boolean);
+const renderHostname = process.env.RENDER_EXTERNAL_HOSTNAME?.trim();
+const allowedHosts = Array.from(
+  new Set(
+    [...defaultAllowedHosts, ...envAllowedHosts, renderHostname ?? ""].filter(Boolean)
+  )
+);
 
 const app = createMcpExpressApp({
   host: "0.0.0.0",
@@ -34,6 +49,8 @@ app.post("/mcp", async (req, res) => {
     await runWithHttpContext(req, res, async () => {
       const transport = new StreamableHTTPServerTransport({
         enableJsonResponse: true,
+        allowedHosts,
+        enableDnsRebindingProtection: true,
       });
       await server.connect(transport as Transport);
       await transport.handleRequest(req, res, req.body);
