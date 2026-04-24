@@ -11,7 +11,7 @@ import bs58 from "bs58";
 import { getAssociatedTokenAddress } from "@solana/spl-token";
 import { createX402Client } from "x402-solana/client";
 
-const TARGET_URL = "http://localhost:3000/mcp";
+const TARGET_URL = process.env.MCP_SERVER_URL?.trim() || "http://localhost:3000/mcp";
 const RPC_URL = "https://api.devnet.solana.com";
 const USDC_DEVNET_MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
 const USDC_MAINNET_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
