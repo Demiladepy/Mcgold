@@ -3,6 +3,7 @@ import type React from "react";
 import { BadgeCheck, Coins, Database, ExternalLink, Hammer, Play, Terminal, Zap } from "lucide-react";
 
 import { CodeTabs } from "../components/code-tabs";
+import Logo from "../src/assets/logo.svg";
 
 const terminalOutput = `[AGENT] Starting counterparty trust analysis
 [AGENT] My wallet:    4dHc2cag4hmVeMFuFHF2Gjc4BoUiKFFMCTGfiWmyMsvx
@@ -69,14 +70,14 @@ const badges = [
 
 export default function Home(): React.ReactElement {
   return (
-    <main className="mx-auto w-full max-w-6xl px-6 pb-20 pt-8 text-foreground sm:px-10 lg:px-12">
-      <nav className="mb-16 flex items-center justify-between border-b border-border pb-4">
-        <div className="font-[var(--font-display)] text-lg font-semibold tracking-tight">mcgold</div>
+    <main className="mx-auto w-full max-w-6xl px-4 pb-16 pt-6 text-foreground sm:px-10 sm:pb-20 sm:pt-8 lg:px-12">
+      <nav className="mb-12 flex flex-wrap items-center justify-between gap-3 border-b border-border pb-4 sm:mb-16">
+        <Logo className="h-6 w-auto shrink-0 sm:h-7" aria-label="mcgold" />
         <Link
-          href="https://github.com/YOUR-REPO"
+          href="https://github.com/Demiladepy/Mcgold"
           target="_blank"
           rel="noreferrer"
-          className="inline-flex items-center gap-2 text-sm font-medium text-muted transition-colors hover:text-foreground"
+          className="inline-flex items-center gap-2 whitespace-nowrap text-xs font-medium text-muted transition-colors hover:text-foreground sm:text-sm"
         >
           <ExternalLink className="h-4 w-4" />
           GitHub
@@ -94,16 +95,16 @@ export default function Home(): React.ReactElement {
           </p>
           <div className="flex flex-wrap items-center gap-3">
             <Link
-              href="https://github.com/YOUR-REPO"
+              href="https://github.com/Demiladepy/Mcgold"
               target="_blank"
               rel="noreferrer"
-              className="rounded-lg bg-accent px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#ea5f2e]"
+              className="w-full rounded-lg bg-accent px-5 py-2.5 text-center text-sm font-semibold text-white transition-colors hover:bg-[#ea5f2e] sm:w-auto"
             >
               View on GitHub
             </Link>
             <Link
               href="#demo"
-              className="rounded-lg border border-border bg-white px-5 py-2.5 text-sm font-semibold text-foreground transition-colors hover:bg-[#f9f3ed]"
+              className="w-full rounded-lg border border-border bg-white px-5 py-2.5 text-center text-sm font-semibold text-foreground transition-colors hover:bg-[#f9f3ed] sm:w-auto"
             >
               Try the demo →
             </Link>
@@ -177,7 +178,7 @@ export default function Home(): React.ReactElement {
             <Terminal className="h-4 w-4" />
             Demo Output
           </div>
-          <pre className="overflow-x-auto bg-[#fdf8f2] p-5 font-mono text-sm leading-relaxed text-[#2f2a25]">
+          <pre className="overflow-x-auto bg-[#fdf8f2] p-4 font-mono text-xs leading-relaxed text-[#2f2a25] sm:p-5 sm:text-sm">
             {terminalOutput}
           </pre>
         </div>
@@ -215,12 +216,12 @@ export default function Home(): React.ReactElement {
         <p className="text-sm text-muted">
           Full integration example:{" "}
           <Link
-            href="https://github.com/YOUR-REPO/blob/main/src/demo-agent.ts"
+            href="https://github.com/Demiladepy/Mcgold/blob/main/src/demo-agent.ts"
             target="_blank"
             rel="noreferrer"
             className="underline decoration-accent/40"
           >
-            github.com/[YOUR-REPO]/blob/main/src/demo-agent.ts
+            github.com/Demiladepy/Mcgold/blob/main/src/demo-agent.ts
           </Link>
         </p>
       </section>
@@ -264,12 +265,12 @@ export default function Home(): React.ReactElement {
           mcgold - built for the Solana Frontier Hackathon, April 2026
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-muted">
-          <Link href="https://github.com/YOUR-REPO" target="_blank" rel="noreferrer" className="hover:text-foreground">
+          <Link href="https://github.com/Demiladepy/Mcgold" target="_blank" rel="noreferrer" className="hover:text-foreground">
             GitHub
           </Link>
           <span>•</span>
           <Link
-            href="https://github.com/YOUR-REPO/blob/main/src/demo-agent.ts"
+            href="https://github.com/Demiladepy/Mcgold/blob/main/src/demo-agent.ts"
             target="_blank"
             rel="noreferrer"
             className="hover:text-foreground"
@@ -277,7 +278,7 @@ export default function Home(): React.ReactElement {
             Demo source
           </Link>
           <span>•</span>
-          <Link href="https://github.com/YOUR-REPO" target="_blank" rel="noreferrer" className="hover:text-foreground">
+          <Link href="https://github.com/Demiladepy/Mcgold" target="_blank" rel="noreferrer" className="hover:text-foreground">
             Architecture
           </Link>
           <span>•</span>

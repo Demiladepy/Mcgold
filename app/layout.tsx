@@ -19,6 +19,9 @@ export const metadata: Metadata = {
   title: "mcgold - Paid Solana Intelligence for AI Agents",
   description:
     "Paid Solana intelligence tools for AI agents. Three tools. Per-call USDC settlement on Solana. No subscriptions, no API keys - just an agent and a wallet.",
+  icons: {
+    icon: "/favicon.svg",
+  },
   openGraph: {
     title: "mcgold - Paid Solana Intelligence for AI Agents",
     description:
