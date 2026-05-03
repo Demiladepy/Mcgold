@@ -24,16 +24,16 @@ AI agents can reason about crypto workflows, but they still need reliable on-cha
 
 ```mermaid
 flowchart LR
-    A[AI Agent] -->|1) MCP tools/call| B[mcgold MCP Server]
-    B -->|2) 402 Payment Required| A
-    A -->|3) Sign + broadcast USDC payment tx| C[Solana Devnet]
-    A -->|4) Retry with PAYMENT-SIGNATURE| B
-    B -->|5) Verify payment tx| C
-    B -->|6) Query balances/pricing| D[Covalent GoldRush API]
-    B -->|6) Query tx history/holders| E[Helius RPC]
-    D -->|7) Data| B
-    E -->|7) Data| B
-    B -->|7) Processed tool result| A
+    A[AI Agent] -->|"1) MCP tools/call"| B[mcgold MCP Server]
+    B -->|"2) 402 Payment Required"| A
+    A -->|"3) Sign + broadcast USDC payment tx"| C[Solana Devnet]
+    A -->|"4) Retry with PAYMENT-SIGNATURE"| B
+    B -->|"5) Verify payment tx"| C
+    B -->|"6) Query balances/pricing"| D[Covalent GoldRush API]
+    B -->|"6) Query tx history/holders"| E[Helius RPC]
+    D -->|"7) Data"| B
+    E -->|"7) Data"| B
+    B -->|"7) Processed tool result"| A
 ```
 
 The agent talks to `POST /mcp` using standard JSON-RPC methods such as `tools/list` and `tools/call`. Paid calls first return payment requirements, then the client signs and submits a USDC payment transaction on Solana devnet and retries with a `PAYMENT-SIGNATURE` header. The server verifies the on-chain payment, fetches source data from GoldRush and Helius, and returns normalized tool output. This keeps payments and data access in one request flow that agent runtimes can automate.
