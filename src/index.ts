@@ -5,7 +5,8 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { createSolanaIntelMcpServer } from "./mcp-server.js";
 import { runWithHttpContext } from "./payment.js";
 
-const PORT = Number(process.env.PORT ?? 3000);
+/** Render injects PORT (often 10000); bind 0.0.0.0 so their port scanner sees the process. */
+const port = Number(process.env.PORT) || 3000;
 const defaultAllowedHosts = [
   "localhost",
   "localhost:3000",
@@ -90,11 +91,11 @@ app.delete("/mcp", (_req, res) => {
   });
 });
 
-app.listen(PORT, "0.0.0.0", () => {
+app.listen(port, "0.0.0.0", () => {
   const banner = [
     "==========================================",
-    `  Solana Intel MCP listening on port ${PORT}`,
-    `  Endpoint: http://localhost:${PORT}/mcp`,
+    `  Solana Intel MCP listening on 0.0.0.0:${port} (PORT=${process.env.PORT ?? "(unset)"})`,
+    `  Local dev: http://127.0.0.1:${port}/mcp`,
     "==========================================",
   ].join("\n");
   console.log(banner);

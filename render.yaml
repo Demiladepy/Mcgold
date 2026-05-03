@@ -1,6 +1,10 @@
 # Single web service: MCP HTTP server (Express + Streamable MCP). Same repo includes the
 # Next.js landing (`app/`, `npm run dev`/`build`/`start`), which is deployed separately on Vercel;
 # Render must NOT run `next start` here.
+#
+# Start command must be ONLY `npm run start:mcp` (no `&& npm start`). If Render's port scan
+# fails, it may fall back to `npm start` (Next.js) — see src/index.ts listen(host 0.0.0.0).
+# Dashboard Settings → Build & Deploy → Start Command should match this file.
 services:
   - type: web
     name: solana-intel-mcp
