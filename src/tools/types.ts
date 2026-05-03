@@ -76,12 +76,26 @@ export const whaleActivityConcentrationSchema = z.object({
   distinctWhalesActive: z.number(),
 });
 
+const whaleHolderSourceSchema = z.enum(["both", "helius_only", "goldrush_only"]);
+
 export const whaleActivityOutputSchema = z.object({
   mint: z.string(),
   symbol: z.string().nullable(),
   tokenUSDPrice: z.number().nullable(),
   analyzedAt: z.string(),
   partial: z.boolean(),
+  /** Unique wallet count on the first Helius `getTokenAccounts` page (aggregated by owner). */
+  heliusHolderCount: z.number().int().min(0),
+  /** First-page rows from GoldRush `getTokenHoldersV2ForTokenAddress` when coverage allows; else null. */
+  goldrushHolderCount: z.number().int().min(0).nullable(),
+  /** Null if GoldRush count unavailable or not comparable; otherwise true when counts agree within ~30%. */
+  holderSourcesAgree: z.boolean().nullable(),
+  /** Whether GoldRush holder data was usable for comparison vs Helius-only. */
+  holderSource: whaleHolderSourceSchema,
+  /** One-line explanation of holder sourcing (coverage gaps, agreement, disagreement). */
+  holderSourceReason: z.string(),
+  /** Human-readable cautions when sources disagree or other caveats beyond holderSourceReason. */
+  dataQualityNotes: z.array(z.string()),
   topHolders: z.array(whaleActivityTopHolderSchema),
   notableMovements: z.array(whaleActivityMovementSchema),
   concentration: whaleActivityConcentrationSchema,

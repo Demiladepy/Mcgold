@@ -1,14 +1,17 @@
+# Single web service: MCP HTTP server (Express + Streamable MCP). Same repo includes the
+# Next.js landing (`app/`, `npm run dev`/`build`/`start`), which is deployed separately on Vercel;
+# Render must NOT run `next start` here.
 services:
   - type: web
     name: solana-intel-mcp
     env: node
     plan: free
     buildCommand: npm install
-    startCommand: npm start
+    startCommand: npm run start:mcp
     healthCheckPath: /healthz
     envVars:
       - key: NODE_VERSION
-        value: 22
+        value: "22"
       - key: NODE_ENV
         value: production
       - key: ALLOWED_HOSTS
@@ -18,4 +21,7 @@ services:
       - key: HELIUS_API_KEY
         sync: false
       - key: MCPAY_RECIPIENT_WALLET
+        sync: false
+      # Not read by src/index.ts or payment.ts (clients use MCPAY_KEYPAIR_PATH). Optional placeholder.
+      - key: MCPAY_KEYPAIR_JSON
         sync: false

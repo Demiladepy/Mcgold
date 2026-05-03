@@ -8,9 +8,9 @@ Paid Solana intelligence tools for AI agents
 ![Devnet](https://img.shields.io/badge/Solana-Devnet-7c3aed)
 ![Hackathon](https://img.shields.io/badge/Hackathon-Solana%20Frontier%202026-f97316)
 
-- 🌐 Live demo: [[https://mcgold.vercel.app/](https://mcgold.vercel.app/)]
-- 🔗 MCP server: [https://mcgold.onrender.com/mcp](https://mcgold.onrender.com/mcp)
-- 📺 Demo video: [DEMO_VIDEO_URL](DEMO_VIDEO_URL)
+- 🌐 Live demo: [Live demo](https://mcgold.vercel.app)
+- 🔗 MCP server: [https://mcgold.onrender.com/mcp](https://mcgold.onrender.com/mcp) — *Note: first request may take 30–60s if the server has been idle (Render free tier cold start).*
+- 📺 Demo video: *Coming with submission* (link will be added when the walkthrough is recorded)
 
 ## What Is This
 
@@ -37,6 +37,29 @@ flowchart LR
 ```
 
 The agent talks to `POST /mcp` using standard JSON-RPC methods such as `tools/list` and `tools/call`. Paid calls first return payment requirements, then the client signs and submits a USDC payment transaction on Solana devnet and retries with a `PAYMENT-SIGNATURE` header. The server verifies the on-chain payment, fetches source data from GoldRush and Helius, and returns normalized tool output. This keeps payments and data access in one request flow that agent runtimes can automate.
+
+**Payments** settle on Solana **devnet** USDC; **data-plane** queries hit Solana **mainnet** (Helius mainnet RPC, plus GoldRush’s `solana-mainnet` APIs where available). This is **intentional for the hackathon** — it keeps test spend near zero while showcasing real on-chain analysis.
+
+### Covalent GoldRush in production
+
+Shipped tools call GoldRush **only** where it adds clear value:
+
+- **`BalanceService.getTokenBalancesForWalletAddress`** — powers portfolio structure and USD marks in **`assess_wallet_risk`** and **`score_counterparty_trust`** (concentration, long-tail, dust, counterparty stability cues).
+- **`PricingService.getTokenPrices`** — **`trace_whale_activity`** uses it for USD notionals on whale movements (7-day window; last quoted point as spot).
+- **`BalanceService.getTokenHoldersV2ForTokenAddress`** (async iterator; we consume the **first** yielded page with `pageSize: 100`, `pageNumber: 0`) — **holder cross-check** vs Helius’s first-page unique-owner count when Covalent returns data.
+
+**Limitations (honest):** `getTokenHoldersV2` **does not reliably serve `solana-mainnet` for many tokens** today — typical errors look like *`Chain: solana-mainnet is not currently supported for this endpoint`*. The tool **does not fail**: it sets **`goldrushHolderCount: null`**, **`holderSourcesAgree: null`**, **`holderSource: "helius_only"`**, and a one-line **`holderSourceReason`** explaining the gap. When both sources return counts, we compare and may set **`holder_source_disagreement`** if they differ by more than ~30%.
+
+**Exploratory / future work:** [`src/test-goldrush.ts`](src/test-goldrush.ts) exercises additional surfaces (e.g. **`getHistoricalPortfolioForWalletAddress`**) to see what GoldRush returns per endpoint over time.
+
+**Division of labor:** Helius is the **parsed-transaction** layer; GoldRush is the **structured balance and pricing** layer, plus **holder cross-check** when coverage allows.
+
+### Payment path
+
+- The server uses **`x402-solana`’s `X402PaymentHandler`** for the protocol flow: **`extractPayment`**, **`createPaymentRequirements`**, **`create402Response`**, **`verifyPayment`**, **`settlePayment`**, etc. ([`src/payment.ts`](src/payment.ts)).
+- **`verifyPaymentOnChain`** queries Solana RPC (`getTransaction` + token delta checks) so we only accept a payment after the tx **landed on-chain**, even if the facilitator’s **`verifyPayment`** response is wrong or flaky.
+- When the facilitator returns **HTTP 409** / **`duplicate_settlement`** (or settle otherwise reports duplicate / unexpected errors **after** on-chain verification already passed), we treat that as **non-fatal** and still complete the tool response.
+- The **demo agent** uses **`createX402Client`** for the paid fetch path and **manual `/settle` posts** for some edge cases ([`src/demo-agent.ts`](src/demo-agent.ts)).
 
 ## The Three Tools
 
@@ -95,6 +118,12 @@ Example response (truncated, USDC mint `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyT
   "symbol": "USDC",
   "tokenUSDPrice": 1.0,
   "partial": false,
+  "heliusHolderCount": 42,
+  "goldrushHolderCount": 40,
+  "holderSourcesAgree": true,
+  "holderSource": "both",
+  "holderSourceReason": "GoldRush and Helius first-page holder counts agree within ~30% (40 vs 42).",
+  "dataQualityNotes": [],
   "topHolders": [
     { "wallet": "...", "balance": "...", "balanceUSD": 123456.78, "percentOfSupply": null }
   ],
@@ -145,6 +174,8 @@ Example response (truncated from demo run using wallet B `9sHdrUkpXAr4wQeKMh4RGK
 Good for: deciding whether to proceed with a transfer when there is limited prior relationship context.
 
 ## Integration (How To Use It)
+
+*Note: first request to `https://mcgold.onrender.com/mcp` may take 30–60s if the service was idle (**Render free tier cold start**).*
 
 ### Quick start with curl
 
@@ -331,6 +362,7 @@ Helius provides practical Solana transaction parsing and holder-level data that 
 - Render free tier can cold-start after idle (~30-60s); a keepalive monitor helps.
 - Helius free-tier limits (around 8 request burst) require conservative call budgeting.
 - `x402-solana` facilitator settle behavior required explicit client-side orchestration in this project; see [`src/test-x402-mcp-client.ts`](src/test-x402-mcp-client.ts).
+- GoldRush **`getTokenHoldersV2ForTokenAddress`** on **`solana-mainnet`** is **incomplete for many tokens** (see `holderSource` / `holderSourceReason` on **`trace_whale_activity`** and [`src/test-goldrush.ts`](src/test-goldrush.ts)). Historical portfolio and other endpoints show similar coverage limits — see the test harness for current API behavior.
 
 ### Future work
 

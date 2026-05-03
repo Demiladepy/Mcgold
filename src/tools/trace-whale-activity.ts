@@ -23,7 +23,7 @@ type ParsedTx = {
   tokenTransfers?: ParsedTokenTransfer[];
 };
 
-const CACHE_PREFIX = "whale-activity:v2:";
+const CACHE_PREFIX = "whale-activity:v4:";
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const HOLDER_FETCH_DELAY_MS = 150;
 const TOP_HOLDER_COUNT = 10;
@@ -152,6 +152,8 @@ async function fetchTokenHolders(mint: string): Promise<{
   rows: Array<{ owner: string; amount: number }>;
   /** Sum of raw amounts for every account in this response (coverage vs supply). */
   pageRawSum: number;
+  /** Distinct owners with positive balance on this Helius page (for GoldRush cross-check). */
+  uniqueOwnersOnPage: number;
   error?: string;
 }> {
   try {
@@ -173,19 +175,82 @@ async function fetchTokenHolders(mint: string): Promise<{
       pageRawSum += amt;
       byOwner.set(owner, (byOwner.get(owner) ?? 0) + amt);
     }
+    const uniqueOwnersOnPage = byOwner.size;
     const rows = [...byOwner.entries()]
       .map(([owner, amount]) => ({ owner, amount }))
       .sort((x, y) => y.amount - x.amount)
       .slice(0, TOP_HOLDER_COUNT);
-    return { rows, pageRawSum };
+    return { rows, pageRawSum, uniqueOwnersOnPage };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("[trace-whale-activity] getTokenAccounts failed", {
       mint,
       err,
     });
-    return { rows: [], pageRawSum: 0, error: msg };
+    return { rows: [], pageRawSum: 0, uniqueOwnersOnPage: 0, error: msg };
   }
+}
+
+/**
+ * First iterable page from GoldRush `getTokenHoldersV2ForTokenAddress` (matches SDK:
+ * `chainName`, `tokenAddress`, then `{ pageSize, pageNumber }`).
+ * Solana-mainnet coverage is often incomplete — errors and empty payloads become `count: null`.
+ */
+async function fetchGoldRushHolderPageCount(mint: string): Promise<{
+  count: number | null;
+  /** Message for `holderSourceReason` when falling back to Helius-only (API error text or short note). */
+  failureDetail: string | null;
+}> {
+  try {
+    const gr = getGoldRushClient();
+    const iterable = gr.BalanceService.getTokenHoldersV2ForTokenAddress(
+      ChainName.SOLANA_MAINNET,
+      mint,
+      { pageSize: 100, pageNumber: 0 }
+    );
+
+    for await (const resp of iterable) {
+      if (resp.error) {
+        const msg = (resp.error_message ?? "GoldRush holders error").trim();
+        console.error("[trace-whale-activity] GoldRush token holders API error", {
+          mint,
+          msg,
+        });
+        return { count: null, failureDetail: msg };
+      }
+      const items = resp.data?.items ?? [];
+      if (items.length === 0) {
+        return {
+          count: null,
+          failureDetail:
+            "GoldRush returned success but an empty holders page for this mint.",
+        };
+      }
+      return { count: items.length, failureDetail: null };
+    }
+
+    return {
+      count: null,
+      failureDetail:
+        "GoldRush holder iterator produced no page for this request.",
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[trace-whale-activity] GoldRush token holders threw", {
+      mint,
+      err,
+    });
+    return { count: null, failureDetail: msg };
+  }
+}
+
+/** True if absolute difference exceeds 30% of the smaller nonzero count (or counts differ when one side is zero). */
+function holderPageCountsStronglyDisagree(a: number, b: number): boolean {
+  if (a === b) return false;
+  const smaller = Math.min(a, b);
+  const diff = Math.abs(a - b);
+  if (smaller === 0) return diff > 0;
+  return diff > 0.3 * smaller;
 }
 
 async function fetchMintMetadata(mint: string): Promise<{
@@ -279,6 +344,7 @@ export async function traceWhaleActivity(
     const total_ms = Math.round(performance.now() - t0);
     console.log("[trace-whale-activity] timings", {
       holdersFetch_ms: 0,
+      goldrushHolders_ms: 0,
       holders_ms: 0,
       pricing_ms: 0,
       movements_ms: 0,
@@ -292,6 +358,42 @@ export async function traceWhaleActivity(
   const tHoldersFetch0 = performance.now();
   const holdersRes = await fetchTokenHolders(mint);
   const holdersFetch_ms = performance.now() - tHoldersFetch0;
+
+  const tGoldRushHolders0 = performance.now();
+  const grHoldersPage = await fetchGoldRushHolderPageCount(mint);
+  const goldrushHolders_ms = performance.now() - tGoldRushHolders0;
+
+  const goldrushHolderCount = grHoldersPage.count;
+  const heliusHolderCount = holdersRes.uniqueOwnersOnPage;
+
+  let holderSourcesAgree: boolean | null = null;
+  let holderSource: WhaleActivityOutput["holderSource"];
+  let holderSourceReason: string;
+
+  if (goldrushHolderCount === null) {
+    holderSourcesAgree = null;
+    holderSource = "helius_only";
+    const hint =
+      grHoldersPage.failureDetail ??
+      "GoldRush did not return usable holder data for this mint.";
+    holderSourceReason = `${hint} Using Helius first-page unique-owner count only.`;
+  } else if (heliusHolderCount > 0) {
+    holderSource = "both";
+    holderSourcesAgree = !holderPageCountsStronglyDisagree(
+      heliusHolderCount,
+      goldrushHolderCount
+    );
+    holderSourceReason = holderSourcesAgree
+      ? `GoldRush and Helius first-page holder counts agree within ~30% (${goldrushHolderCount} vs ${heliusHolderCount}).`
+      : `GoldRush (${goldrushHolderCount}) and Helius (${heliusHolderCount}) first-page holder counts differ by more than ~30%.`;
+  } else {
+    holderSource = "goldrush_only";
+    holderSourcesAgree = null;
+    holderSourceReason = `Helius reported no funded token accounts on the first page while GoldRush returned ${goldrushHolderCount} holder row(s); whale movement analysis still follows Helius top-holder addresses when present.`;
+  }
+
+  const holderSourceDisagreement =
+    holderSource === "both" && holderSourcesAgree === false;
 
   const tHoldersMeta0 = performance.now();
   const meta = await fetchMintMetadata(mint);
@@ -509,6 +611,13 @@ export async function traceWhaleActivity(
       : null;
 
   const flags: string[] = [];
+  const dataQualityNotes: string[] = [];
+  if (holderSourceDisagreement) {
+    flags.push("holder_source_disagreement");
+    dataQualityNotes.push(
+      `Holder counts disagree between GoldRush and Helius (${goldrushHolderCount} vs ${heliusHolderCount}) — treat distribution metrics with caution; one source may be lagging or not fully indexing this token.`
+    );
+  }
   if (
     netFlowUSD !== null &&
     netFlowUSD < 0 &&
@@ -601,6 +710,12 @@ export async function traceWhaleActivity(
     tokenUSDPrice,
     analyzedAt: new Date().toISOString(),
     partial,
+    heliusHolderCount,
+    goldrushHolderCount,
+    holderSourcesAgree,
+    holderSource,
+    holderSourceReason,
+    dataQualityNotes,
     topHolders,
     notableMovements,
     concentration: {
@@ -616,6 +731,7 @@ export async function traceWhaleActivity(
   const total_ms = Math.round(performance.now() - t0);
   console.log("[trace-whale-activity] timings", {
     holdersFetch_ms: Math.round(holdersFetch_ms),
+    goldrushHolders_ms: Math.round(goldrushHolders_ms),
     holders_ms: Math.round(holders_ms),
     pricing_ms: Math.round(pricing_ms),
     movements_ms: Math.round(movements_ms),

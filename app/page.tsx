@@ -123,26 +123,36 @@ export default function Home(): React.ReactElement {
         </div>
       </section>
 
-      <section className="mt-24 grid gap-10 border-y border-border py-14 md:grid-cols-2">
-        <div className="space-y-3">
-          <h2 className="font-[var(--font-display)] text-2xl font-semibold tracking-tight">
-            Today: AI agents can&apos;t pay for data.
-          </h2>
-          <p className="max-w-[65ch] leading-relaxed text-muted">
-            Agents reasoning about Solana need rich on-chain context, but every existing API
-            requires accounts, API keys, and monthly subscriptions. That doesn&apos;t fit how agents
-            actually work.
-          </p>
+      <section className="mt-24 space-y-10 border-y border-border py-14">
+        <div className="grid gap-10 md:grid-cols-2">
+          <div className="space-y-3">
+            <h2 className="font-[var(--font-display)] text-2xl font-semibold tracking-tight">
+              Today: AI agents can&apos;t pay for data.
+            </h2>
+            <p className="max-w-[65ch] leading-relaxed text-muted">
+              Agents reasoning about Solana need rich on-chain context, but every existing API
+              requires accounts, API keys, and monthly subscriptions. That doesn&apos;t fit how agents
+              actually work.
+            </p>
+          </div>
+          <div className="space-y-3">
+            <h2 className="font-[var(--font-display)] text-2xl font-semibold tracking-tight">
+              mcgold: pay-per-query intelligence.
+            </h2>
+            <p className="max-w-[65ch] leading-relaxed text-muted">
+              Discover tools via MCP. Pay for each call in USDC, settled on Solana in seconds. The
+              agent gets the data it needs, you only pay for what you use.
+            </p>
+          </div>
         </div>
-        <div className="space-y-3">
-          <h2 className="font-[var(--font-display)] text-2xl font-semibold tracking-tight">
-            mcgold: pay-per-query intelligence.
-          </h2>
-          <p className="max-w-[65ch] leading-relaxed text-muted">
-            Discover tools via MCP. Pay for each call in USDC, settled on Solana in seconds. The
-            agent gets the data it needs, you only pay for what you use.
-          </p>
-        </div>
+        <p className="max-w-[72ch] text-sm leading-relaxed text-muted">
+          Built on Covalent&apos;s GoldRush API: structured Solana balances and USD marks for wallet
+          risk, token spot pricing in{" "}
+          <span className="font-mono text-xs text-foreground/80">trace_whale_activity</span>, and a
+          production call that requests GoldRush&apos;s token-holder endpoint for cross-checking
+          Helius when that route returns Solana pages. Parsed transaction history and movements use
+          Helius. Different tools pull from different strengths.
+        </p>
       </section>
 
       <section className="mt-24 space-y-8">

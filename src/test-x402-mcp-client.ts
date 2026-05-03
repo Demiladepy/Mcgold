@@ -398,6 +398,34 @@ async function main(): Promise<void> {
     log("final tool result received", {
       preview: truncate(paidResultText, 500),
     });
+    try {
+      const payload = paidCall.result as { content?: Array<{ text?: string }> };
+      const textPart = payload?.content?.find((c) => c.text)?.text;
+      if (textPart) {
+        const whale = JSON.parse(textPart) as {
+          goldrushHolderCount?: number | null;
+          heliusHolderCount?: number;
+          holderSourcesAgree?: boolean | null;
+          holderSource?: string;
+          holderSourceReason?: string;
+          flags?: string[];
+          dataQualityNotes?: string[];
+        };
+        log("trace_whale_activity holder-source fields", {
+          goldrushHolderCount: whale.goldrushHolderCount ?? null,
+          heliusHolderCount: whale.heliusHolderCount ?? null,
+          holderSourcesAgree: whale.holderSourcesAgree ?? null,
+          holderSource: whale.holderSource ?? null,
+          holderSourceReason: whale.holderSourceReason ?? null,
+          holder_source_disagreement: Boolean(
+            whale.flags?.includes("holder_source_disagreement")
+          ),
+          dataQualityNotes: whale.dataQualityNotes ?? [],
+        });
+      }
+    } catch {
+      log("trace_whale_activity holder-source parse skipped", {});
+    }
 
     log("payment submitted on devnet", {
       paymentTxSignature: paymentTxSignature ?? "unavailable",
