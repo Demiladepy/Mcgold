@@ -8,7 +8,7 @@ Paid Solana intelligence tools for AI agents
 ![Devnet](https://img.shields.io/badge/Solana-Devnet-7c3aed)
 ![Hackathon](https://img.shields.io/badge/Hackathon-Solana%20Frontier%202026-f97316)
 
-- 🌐 Live demo: [[LANDING_PAGE_URL](https://mcgold.vercel.app/)]
+- 🌐 Live demo: [[https://mcgold.vercel.app/](https://mcgold.vercel.app/)]
 - 🔗 MCP server: [https://mcgold.onrender.com/mcp](https://mcgold.onrender.com/mcp)
 - 📺 Demo video: [DEMO_VIDEO_URL](DEMO_VIDEO_URL)
 
