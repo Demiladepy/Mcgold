@@ -7,7 +7,8 @@ import { X402PaymentHandler } from "x402-solana/server";
 const USDC_DEVNET_MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
 const NETWORK = "solana-devnet";
 const FACILITATOR_URL = "https://facilitator.payai.network";
-const RPC_URL = "https://api.devnet.solana.com";
+const RPC_URL =
+  process.env.VENUM_RPC_URL?.trim() || "https://api.devnet.solana.com";
 
 type HttpContext = {
   req: Request;

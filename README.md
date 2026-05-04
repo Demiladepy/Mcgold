@@ -40,6 +40,8 @@ The agent talks to `POST /mcp` using standard JSON-RPC methods such as `tools/li
 
 **Payments** settle on Solana **devnet** USDC; **data-plane** queries hit Solana **mainnet** (Helius mainnet RPC, plus GoldRush’s `solana-mainnet` APIs where available). This is **intentional for the hackathon** — it keeps test spend near zero while showcasing real on-chain analysis.
 
+Solana RPC for payment verification: Venum's execution-grade RPC (when configured) with public devnet RPC as fallback.
+
 ### Covalent GoldRush in production
 
 Shipped tools call GoldRush **only** where it adds clear value:
