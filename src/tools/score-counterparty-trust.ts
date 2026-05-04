@@ -1,3 +1,4 @@
+import { address } from "@solana/addresses";
 import { PublicKey } from "@solana/web3.js";
 import type { EnhancedTransaction } from "helius-sdk/enhanced/types";
 import { getCached, setCached } from "../cache.js";
@@ -6,13 +7,15 @@ import {
   getHeliusClient,
   SOLANA_CHAIN_NAME,
 } from "../clients.js";
+import { withGoldRushRetry } from "../goldrush-retry.js";
+import { chooseEndpoint, type EndpointRoutingDecision } from "../goldrush-routing.js";
 import type {
   CounterpartyTrustInput,
   CounterpartyTrustOutput,
   CounterpartyTrustReason,
 } from "./types.js";
 
-const CACHE_PREFIX = "counterparty-trust:v1:";
+const CACHE_PREFIX = "counterparty-trust:v2:";
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const TX_LIMIT = 200;
 const HELIUS_TX_GAP_MS = 150;
@@ -69,11 +72,15 @@ async function fetchBalances(wallet: string): Promise<{
   items: BalanceRow[] | null;
   error?: string;
 }> {
+  const route = chooseEndpoint(
+    "BalanceService.getTokenBalancesForWalletAddress",
+    "counterparty_stability"
+  );
   try {
     const gr = getGoldRushClient();
-    const resp = await gr.BalanceService.getTokenBalancesForWalletAddress(
-      SOLANA_CHAIN_NAME,
-      wallet
+    const resp = await withGoldRushRetry(
+      route.endpoint,
+      () => gr.BalanceService.getTokenBalancesForWalletAddress(SOLANA_CHAIN_NAME, wallet)
     );
     if (resp.error) {
       const msg = resp.error_message ?? "GoldRush balances error";
@@ -113,6 +120,28 @@ async function fetchBalances(wallet: string): Promise<{
       err,
     });
     return { items: null, error: msg };
+  }
+}
+
+async function fetchAddressActivity(wallet: string): Promise<{
+  chains: string[] | null;
+  error?: string;
+}> {
+  const route = chooseEndpoint("AllChainsService.getAddressActivity", "cross_chain_context");
+  try {
+    const gr = getGoldRushClient();
+    const resp = await withGoldRushRetry(route.endpoint, () =>
+      gr.AllChainsService.getAddressActivity(wallet)
+    );
+    if (resp.error) {
+      return { chains: null, error: resp.error_message ?? "GoldRush address activity error" };
+    }
+    const chains = (resp.data?.items ?? [])
+      .map((x) => (x.chain_name ?? "").trim())
+      .filter((x) => x.length > 0);
+    return { chains };
+  } catch (err) {
+    return { chains: null, error: err instanceof Error ? err.message : String(err) };
   }
 }
 
@@ -306,6 +335,55 @@ function activityOverlapPercent(
   return Math.round((both / bucketCount) * 100);
 }
 
+async function fetchHeliusTxsWithFallback(
+  wallet: string,
+  windowStartSec: number
+): Promise<{ txs: EnhancedTransaction[]; source: "enhanced_by_address" | "signatures_fallback"; error?: string }> {
+  const helius = getHeliusClient();
+  try {
+    const txs = (await helius.enhanced.getTransactionsByAddress({
+      address: wallet,
+      limit: TX_LIMIT,
+      gteTime: windowStartSec,
+      sortOrder: "desc",
+    })) as EnhancedTransaction[];
+    return { txs, source: "enhanced_by_address" };
+  } catch (err) {
+    const primaryErr = err instanceof Error ? err.message : String(err);
+    console.warn("[score-counterparty-trust] falling back to signatures fetch path", {
+      wallet,
+      primaryErr,
+    });
+    try {
+      const sigRows = await helius.getSignaturesForAddress(address(wallet), {
+        limit: Math.min(TX_LIMIT, 100),
+      });
+      const signatures = sigRows
+        .filter((x) => typeof x.signature === "string" && x.signature.length > 0)
+        .map((x) => x.signature);
+      if (signatures.length === 0) {
+        return { txs: [], source: "signatures_fallback" };
+      }
+      const txs = (await helius.enhanced.getTransactions({
+        transactions: signatures,
+      })) as EnhancedTransaction[];
+      const filtered = txs.filter((tx) => {
+        const ts = txTimestampSec(tx);
+        return ts !== null && ts >= windowStartSec;
+      });
+      return { txs: filtered, source: "signatures_fallback" };
+    } catch (fallbackErr) {
+      const fallbackMessage =
+        fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+      return {
+        txs: [],
+        source: "signatures_fallback",
+        error: `enhanced_by_address: ${primaryErr} | signatures_fallback: ${fallbackMessage}`,
+      };
+    }
+  }
+}
+
 export async function scoreCounterpartyTrust(
   input: CounterpartyTrustInput
 ): Promise<CounterpartyTrustOutput> {
@@ -334,57 +412,52 @@ export async function scoreCounterpartyTrust(
 
   let partial = false;
   const tParallel0 = performance.now();
+  const endpointRouting: EndpointRoutingDecision[] = [
+    chooseEndpoint("BalanceService.getTokenBalancesForWalletAddress", "counterparty_stability"),
+    chooseEndpoint("AllChainsService.getAddressActivity", "cross_chain_context"),
+  ];
 
-  const [balAR, balBR, txPair] = await Promise.all([
+  const [balAR, balBR, activityAR, activityBR, txPair] = await Promise.all([
     fetchBalances(walletA),
     fetchBalances(walletB),
+    fetchAddressActivity(walletA),
+    fetchAddressActivity(walletB),
     (async (): Promise<{
       txsA: EnhancedTransaction[];
       txsB: EnhancedTransaction[];
     }> => {
-      const helius = getHeliusClient();
       let txsA: EnhancedTransaction[] = [];
       let txsB: EnhancedTransaction[] = [];
-      try {
-        txsA = (await helius.enhanced.getTransactionsByAddress({
-          address: walletA,
-          limit: TX_LIMIT,
-          gteTime: windowStartSec,
-          sortOrder: "desc",
-        })) as EnhancedTransaction[];
-      } catch (err) {
+      const resA = await fetchHeliusTxsWithFallback(walletA, windowStartSec);
+      txsA = resA.txs;
+      if (resA.error) {
         partial = true;
-        if (isRateLimitedError(err)) {
+        if (isRateLimitedError(resA.error)) {
           console.error(
-            "[score-counterparty-trust] Helius txs walletA rate limited",
-            { walletA, err }
+            "[score-counterparty-trust] Helius txs walletA rate limited/fallback",
+            { walletA, error: resA.error }
           );
         } else {
-          console.error("[score-counterparty-trust] Helius txs walletA failed", {
+          console.error("[score-counterparty-trust] Helius txs walletA failed after fallback", {
             walletA,
-            err,
+            error: resA.error,
           });
         }
       }
       await sleep(HELIUS_TX_GAP_MS);
-      try {
-        txsB = (await helius.enhanced.getTransactionsByAddress({
-          address: walletB,
-          limit: TX_LIMIT,
-          gteTime: windowStartSec,
-          sortOrder: "desc",
-        })) as EnhancedTransaction[];
-      } catch (err) {
+      const resB = await fetchHeliusTxsWithFallback(walletB, windowStartSec);
+      txsB = resB.txs;
+      if (resB.error) {
         partial = true;
-        if (isRateLimitedError(err)) {
+        if (isRateLimitedError(resB.error)) {
           console.error(
-            "[score-counterparty-trust] Helius txs walletB rate limited",
-            { walletB, err }
+            "[score-counterparty-trust] Helius txs walletB rate limited/fallback",
+            { walletB, error: resB.error }
           );
         } else {
-          console.error("[score-counterparty-trust] Helius txs walletB failed", {
+          console.error("[score-counterparty-trust] Helius txs walletB failed after fallback", {
             walletB,
-            err,
+            error: resB.error,
           });
         }
       }
@@ -393,7 +466,7 @@ export async function scoreCounterpartyTrust(
   ]);
 
   const parallelFetch_ms = performance.now() - tParallel0;
-  if (balAR.error || balBR.error) partial = true;
+  if (balAR.error || balBR.error || activityAR.error || activityBR.error) partial = true;
 
   const txsA = txPair.txsA;
   const txsB = txPair.txsB;
@@ -600,6 +673,26 @@ export async function scoreCounterpartyTrust(
     },
   ];
 
+  const chainsA = activityAR.chains ?? [];
+  const chainsB = activityBR.chains ?? [];
+  const lowerB = new Set(chainsB.map((x) => x.toLowerCase()));
+  const sharedActiveChains = chainsA.filter((x) => lowerB.has(x.toLowerCase())).slice(0, 8);
+  const crossChainContext =
+    chainsA.length === 0 && chainsB.length === 0
+      ? null
+      : {
+          walletAActiveChains: chainsA.length,
+          walletBActiveChains: chainsB.length,
+          sharedActiveChains,
+          note:
+            sharedActiveChains.length > 0
+              ? `Wallets share activity on ${sharedActiveChains.length} chain(s): ${sharedActiveChains.join(", ")}.`
+              : "Wallets show no shared active chains in GoldRush activity data.",
+        };
+  if (crossChainContext && crossChainContext.sharedActiveChains.length > 0) {
+    positiveSignals.push("cross_chain_overlap");
+  }
+
   const out: CounterpartyTrustOutput = {
     walletA,
     walletB,
@@ -619,6 +712,8 @@ export async function scoreCounterpartyTrust(
       sharedTxTypes,
       activityOverlap,
     },
+    crossChainContext,
+    endpointRouting,
     redFlags,
     positiveSignals,
     reasons,

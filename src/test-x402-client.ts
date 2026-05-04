@@ -9,7 +9,8 @@ import {
 import { createX402Client } from "x402-solana/client";
 
 const TARGET_URL = "http://localhost:3100/paid-ping";
-const RPC_URL = "https://api.devnet.solana.com";
+const RPC_URL =
+  process.env.VENUM_RPC_URL?.trim() || "https://api.devnet.solana.com";
 
 function log(stage: string, data?: unknown): void {
   const ts = new Date().toISOString();

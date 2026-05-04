@@ -11,13 +11,15 @@ import {
   getHeliusClient,
   SOLANA_CHAIN_NAME,
 } from "../clients.js";
+import { withGoldRushRetry } from "../goldrush-retry.js";
+import { chooseEndpoint, type EndpointRoutingDecision } from "../goldrush-routing.js";
 import type {
   WalletRiskInput,
   WalletRiskOutput,
   WalletRiskReason,
 } from "./types.js";
 
-const CACHE_PREFIX = "wallet-risk:v3:";
+const CACHE_PREFIX = "wallet-risk:v4:";
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
 const STABLE_TICKERS = new Set(
@@ -44,12 +46,14 @@ const MAJOR_TICKERS = new Set(
 );
 
 const WEIGHTS = {
-  walletAge: 20,
-  concentration: 20,
-  txDiversity: 15,
-  longtailExposure: 25,
+  walletAge: 15,
+  concentration: 15,
+  txDiversity: 10,
+  longtailExposure: 15,
   activityRecency: 10,
   dustAnomaly: 10,
+  portfolioTrend: 15,
+  approvalRisk: 10,
 } as const;
 
 type SigRow = { signature: string; blockTime: number | null };
@@ -59,6 +63,17 @@ type BalanceRow = {
   contract_address: string | null;
   quote: number | null;
   is_spam: boolean | null;
+};
+
+type ApprovalSummary = {
+  spenderCount: number;
+  totalValueAtRiskQuote: number;
+  highRiskSpenderCount: number;
+};
+
+type PortfolioSeriesPoint = {
+  timestampMs: number;
+  quoteUsd: number;
 };
 
 /** Deepest signature scan for wallet age (separate from the 50-sig recent window). */
@@ -76,9 +91,13 @@ type FetchBundle = {
   balances: BalanceRow[] | null;
   signatures: SigRow[] | null;
   parsedTxs: ParsedTx[] | null;
+  approvals: ApprovalSummary | null;
+  portfolioSeries: PortfolioSeriesPoint[] | null;
   walletAgeScan: WalletAgeScan | null;
   errors: {
     goldrush?: string;
+    goldrushApprovals?: string;
+    goldrushPortfolio?: string;
     heliusSignatures?: string;
     heliusParse?: string;
     heliusWalletAge?: string;
@@ -106,9 +125,9 @@ async function fetchBalances(wallet: string): Promise<{
 }> {
   try {
     const gr = getGoldRushClient();
-    const resp = await gr.BalanceService.getTokenBalancesForWalletAddress(
-      SOLANA_CHAIN_NAME,
-      wallet
+    const resp = await withGoldRushRetry(
+      "BalanceService.getTokenBalancesForWalletAddress",
+      () => gr.BalanceService.getTokenBalancesForWalletAddress(SOLANA_CHAIN_NAME, wallet)
     );
     if (resp.error) {
       const msg = resp.error_message ?? "GoldRush balances error";
@@ -151,6 +170,107 @@ async function fetchBalances(wallet: string): Promise<{
   }
 }
 
+async function fetchApprovals(wallet: string): Promise<{
+  summary: ApprovalSummary | null;
+  error?: string;
+}> {
+  try {
+    const gr = getGoldRushClient();
+    const resp = await withGoldRushRetry("SecurityService.getApprovals", () =>
+      gr.SecurityService.getApprovals(SOLANA_CHAIN_NAME, wallet)
+    );
+    if (resp.error) {
+      return { summary: null, error: resp.error_message ?? "GoldRush approvals error" };
+    }
+    const items = resp.data?.items ?? [];
+    let spenderCount = 0;
+    let highRiskSpenderCount = 0;
+    let totalValueAtRiskQuote = 0;
+    for (const token of items) {
+      const tokenRisk = Number((token as { value_at_risk_quote?: unknown }).value_at_risk_quote ?? 0);
+      if (Number.isFinite(tokenRisk) && tokenRisk > 0) {
+        totalValueAtRiskQuote += tokenRisk;
+      }
+      const spenders =
+        (token as { spenders?: Array<{ spender_address?: string; risk_factor?: string; value_at_risk_quote?: number }> })
+          .spenders ?? [];
+      for (const spender of spenders) {
+        if (!spender.spender_address) continue;
+        spenderCount += 1;
+        const risk = (spender.risk_factor ?? "").toLowerCase();
+        if (risk.includes("high") || risk.includes("critical")) highRiskSpenderCount += 1;
+      }
+    }
+    return {
+      summary: { spenderCount, totalValueAtRiskQuote, highRiskSpenderCount },
+    };
+  } catch (err) {
+    return {
+      summary: null,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+async function fetchHistoricalPortfolioSeries(wallet: string): Promise<{
+  series: PortfolioSeriesPoint[] | null;
+  error?: string;
+}> {
+  try {
+    const gr = getGoldRushClient();
+    const resp = await withGoldRushRetry(
+      "BalanceService.getHistoricalPortfolioForWalletAddress",
+      () =>
+        gr.BalanceService.getHistoricalPortfolioForWalletAddress(SOLANA_CHAIN_NAME, wallet, {
+          days: 30,
+        })
+    );
+    if (resp.error) {
+      return { series: null, error: resp.error_message ?? "GoldRush portfolio error" };
+    }
+    const byTs = new Map<number, number>();
+    for (const item of resp.data?.items ?? []) {
+      for (const h of item.holdings ?? []) {
+        const t = new Date(String(h.timestamp ?? "")).getTime();
+        const q = Number(h.close?.quote ?? 0);
+        if (!Number.isFinite(t) || !Number.isFinite(q)) continue;
+        byTs.set(t, (byTs.get(t) ?? 0) + q);
+      }
+    }
+    const series = [...byTs.entries()]
+      .map(([timestampMs, quoteUsd]) => ({ timestampMs, quoteUsd }))
+      .sort((a, b) => a.timestampMs - b.timestampMs);
+    return { series };
+  } catch (err) {
+    return {
+      series: null,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+async function fetchAddressActivity(wallet: string): Promise<{
+  chains: string[] | null;
+  error?: string;
+}> {
+  const route = chooseEndpoint("AllChainsService.getAddressActivity", "cross_chain_risk");
+  try {
+    const gr = getGoldRushClient();
+    const resp = await withGoldRushRetry(route.endpoint, () =>
+      gr.AllChainsService.getAddressActivity(wallet)
+    );
+    if (resp.error) {
+      return { chains: null, error: resp.error_message ?? "GoldRush address activity error" };
+    }
+    const chains = (resp.data?.items ?? [])
+      .map((x) => (x.chain_name ?? "").trim())
+      .filter((x) => x.length > 0);
+    return { chains };
+  } catch (err) {
+    return { chains: null, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 const WALLET_AGE_PAGE_LIMIT = 500;
 /** Two pages of 500 signatures each (max 1000) for wallet-age depth. */
 const WALLET_AGE_MAX_PAGES = 2;
@@ -158,6 +278,8 @@ const NINETY_DAYS_SEC = 90 * 86400;
 
 type AssessWalletRiskLoadTimings = {
   balances_ms: number;
+  approvals_ms: number;
+  portfolio_ms: number;
   recentSigs_ms: number;
   walletAgeScan_ms: number;
   parseTransactions_ms: number;
@@ -348,6 +470,8 @@ async function loadWalletData(
 ): Promise<{ bundle: FetchBundle; timings: AssessWalletRiskLoadTimings }> {
   const zeroTimings: AssessWalletRiskLoadTimings = {
     balances_ms: 0,
+    approvals_ms: 0,
+    portfolio_ms: 0,
     recentSigs_ms: 0,
     walletAgeScan_ms: 0,
     parseTransactions_ms: 0,
@@ -359,10 +483,20 @@ async function loadWalletData(
     return { bundle: cached, timings: zeroTimings };
   }
 
-  const [balTimed, sigTimed, ageTimed] = await Promise.all([
+  const [balTimed, approvalsTimed, portfolioTimed, sigTimed, ageTimed] = await Promise.all([
     (async () => {
       const s = performance.now();
       const r = await fetchBalances(wallet);
+      return { r, ms: performance.now() - s };
+    })(),
+    (async () => {
+      const s = performance.now();
+      const r = await fetchApprovals(wallet);
+      return { r, ms: performance.now() - s };
+    })(),
+    (async () => {
+      const s = performance.now();
+      const r = await fetchHistoricalPortfolioSeries(wallet);
       return { r, ms: performance.now() - s };
     })(),
     (async () => {
@@ -387,12 +521,16 @@ async function loadWalletData(
   const bundle: FetchBundle = {
     wallet,
     balances: balTimed.r.items,
+    approvals: approvalsTimed.r.summary,
+    portfolioSeries: portfolioTimed.r.series,
     signatures: sigTimed.r.rows,
     parsedTxs: parseRes.txs,
     walletAgeScan: ageTimed.r,
     errors: {},
   };
   if (balTimed.r.error) bundle.errors.goldrush = balTimed.r.error;
+  if (approvalsTimed.r.error) bundle.errors.goldrushApprovals = approvalsTimed.r.error;
+  if (portfolioTimed.r.error) bundle.errors.goldrushPortfolio = portfolioTimed.r.error;
   if (sigTimed.r.error) bundle.errors.heliusSignatures = sigTimed.r.error;
   if (parseRes.error) bundle.errors.heliusParse = parseRes.error;
   if (ageTimed.r.error) bundle.errors.heliusWalletAge = ageTimed.r.error;
@@ -402,6 +540,8 @@ async function loadWalletData(
     bundle,
     timings: {
       balances_ms: balTimed.ms,
+      approvals_ms: approvalsTimed.ms,
+      portfolio_ms: portfolioTimed.ms,
       recentSigs_ms: sigTimed.ms,
       walletAgeScan_ms: ageTimed.ms,
       parseTransactions_ms,
@@ -789,9 +929,87 @@ function scoreDust(
   };
 }
 
+function scorePortfolioTrend(data: FetchBundle): { score: number; detail: string } {
+  const series = data.portfolioSeries;
+  if (!series || series.length < 3) {
+    return {
+      score: 40,
+      detail: `Historical portfolio trend data was unavailable${data.errors.goldrushPortfolio ? ` (${data.errors.goldrushPortfolio})` : ""}; using neutral trend score 40.`,
+    };
+  }
+  const first = series[0]!.quoteUsd;
+  const last = series[series.length - 1]!.quoteUsd;
+  const peak = Math.max(...series.map((p) => p.quoteUsd));
+  const trough = Math.min(...series.map((p) => p.quoteUsd));
+  const baseline = Math.max(1, first);
+  const changePct = ((last - first) / baseline) * 100;
+  const drawdownPct = peak > 0 ? ((peak - trough) / peak) * 100 : 0;
+
+  if (drawdownPct > 70 || changePct < -60) {
+    return {
+      score: 80,
+      detail: `Historical portfolio trend is unstable: 30d change ${changePct.toFixed(1)}% with peak-to-trough drawdown ${drawdownPct.toFixed(1)}% (sub-score 80).`,
+    };
+  }
+  if (drawdownPct > 40 || changePct < -30) {
+    return {
+      score: 55,
+      detail: `Historical portfolio shows moderate stress: 30d change ${changePct.toFixed(1)}%, drawdown ${drawdownPct.toFixed(1)}% (sub-score 55).`,
+    };
+  }
+  if (changePct > 20 && drawdownPct < 30) {
+    return {
+      score: 15,
+      detail: `Historical portfolio appears stable/improving: 30d change ${changePct.toFixed(1)}% with limited drawdown ${drawdownPct.toFixed(1)}% (sub-score 15).`,
+    };
+  }
+  return {
+    score: 30,
+    detail: `Historical portfolio trend is mixed: 30d change ${changePct.toFixed(1)}%, drawdown ${drawdownPct.toFixed(1)}% (sub-score 30).`,
+  };
+}
+
+function scoreApprovalRisk(data: FetchBundle): { score: number; detail: string } {
+  const approvals = data.approvals;
+  if (!approvals) {
+    return {
+      score: 40,
+      detail: `Approval data unavailable${data.errors.goldrushApprovals ? ` (${data.errors.goldrushApprovals})` : ""}; using neutral approval-risk score 40.`,
+    };
+  }
+  const { spenderCount, highRiskSpenderCount, totalValueAtRiskQuote } = approvals;
+  if (spenderCount === 0 && totalValueAtRiskQuote <= 0) {
+    return {
+      score: 10,
+      detail:
+        "No active spender approvals or value-at-risk exposure detected (sub-score 10).",
+    };
+  }
+  if (highRiskSpenderCount >= 2 || totalValueAtRiskQuote > 10_000) {
+    return {
+      score: 85,
+      detail: `High approval risk detected: ${spenderCount} spender approvals, ${highRiskSpenderCount} marked high risk, value-at-risk ~$${totalValueAtRiskQuote.toFixed(2)} (sub-score 85).`,
+    };
+  }
+  if (spenderCount >= 5 || totalValueAtRiskQuote > 1_000) {
+    return {
+      score: 60,
+      detail: `Moderate approval exposure: ${spenderCount} spender approvals and value-at-risk ~$${totalValueAtRiskQuote.toFixed(2)} (sub-score 60).`,
+    };
+  }
+  return {
+    score: 30,
+    detail: `Limited approval exposure: ${spenderCount} spender approvals and value-at-risk ~$${totalValueAtRiskQuote.toFixed(2)} (sub-score 30).`,
+  };
+}
+
 function buildDataQualityNote(data: FetchBundle): string | null {
   const parts: string[] = [];
   if (data.errors.goldrush) parts.push(`GoldRush: ${data.errors.goldrush}`);
+  if (data.errors.goldrushApprovals)
+    parts.push(`GoldRush approvals: ${data.errors.goldrushApprovals}`);
+  if (data.errors.goldrushPortfolio)
+    parts.push(`GoldRush portfolio: ${data.errors.goldrushPortfolio}`);
   if (data.errors.heliusSignatures)
     parts.push(`Helius signatures: ${data.errors.heliusSignatures}`);
   if (data.errors.heliusParse)
@@ -812,7 +1030,14 @@ export async function assessWalletRisk(
   const nowSec = Math.floor(Date.now() / 1000);
 
   const { bundle: data, timings: loadTimings } = await loadWalletData(wallet);
+  const activityRes = await fetchAddressActivity(wallet);
   const dataNote = buildDataQualityNote(data);
+  const endpointRouting: EndpointRoutingDecision[] = [
+    chooseEndpoint("BalanceService.getTokenBalancesForWalletAddress", "wallet_risk"),
+    chooseEndpoint("SecurityService.getApprovals", "wallet_risk"),
+    chooseEndpoint("BalanceService.getHistoricalPortfolioForWalletAddress", "wallet_risk"),
+    chooseEndpoint("AllChainsService.getAddressActivity", "cross_chain_risk"),
+  ];
 
   const parts = {
     walletAge: scoreWalletAge(data, nowSec),
@@ -821,6 +1046,8 @@ export async function assessWalletRisk(
     longtailExposure: scoreLongtail(data),
     activityRecency: scoreActivityRecency(data, nowSec),
     dustAnomaly: scoreDust(data),
+    portfolioTrend: scorePortfolioTrend(data),
+    approvalRisk: scoreApprovalRisk(data),
   };
 
   const weightSum =
@@ -829,7 +1056,9 @@ export async function assessWalletRisk(
     WEIGHTS.txDiversity +
     WEIGHTS.longtailExposure +
     WEIGHTS.activityRecency +
-    WEIGHTS.dustAnomaly;
+    WEIGHTS.dustAnomaly +
+    WEIGHTS.portfolioTrend +
+    WEIGHTS.approvalRisk;
 
   let weighted = 0;
   weighted += parts.walletAge.score * WEIGHTS.walletAge;
@@ -838,6 +1067,8 @@ export async function assessWalletRisk(
   weighted += parts.longtailExposure.score * WEIGHTS.longtailExposure;
   weighted += parts.activityRecency.score * WEIGHTS.activityRecency;
   weighted += parts.dustAnomaly.score * WEIGHTS.dustAnomaly;
+  weighted += parts.portfolioTrend.score * WEIGHTS.portfolioTrend;
+  weighted += parts.approvalRisk.score * WEIGHTS.approvalRisk;
 
   const score = Math.round(weighted / weightSum);
   const tier = tierFromScore(score);
@@ -873,6 +1104,16 @@ export async function assessWalletRisk(
       weight: WEIGHTS.dustAnomaly,
       detail: parts.dustAnomaly.detail,
     },
+    {
+      factor: "portfolioTrend",
+      weight: WEIGHTS.portfolioTrend,
+      detail: parts.portfolioTrend.detail,
+    },
+    {
+      factor: "approvalRisk",
+      weight: WEIGHTS.approvalRisk,
+      detail: parts.approvalRisk.detail,
+    },
   ];
 
   if (dataNote) {
@@ -884,9 +1125,20 @@ export async function assessWalletRisk(
     };
   }
 
+  const crossChainContext =
+    !activityRes.chains || activityRes.chains.length === 0
+      ? null
+      : {
+          activeChains: activityRes.chains.length,
+          topChains: activityRes.chains.slice(0, 6),
+          note: `Address is active on ${activityRes.chains.length} chain(s) according to GoldRush.`,
+        };
+
   const total_ms = Math.round(performance.now() - t0);
   console.log("[assess-wallet-risk] timings", {
     balances_ms: Math.round(loadTimings.balances_ms),
+    approvals_ms: Math.round(loadTimings.approvals_ms),
+    portfolio_ms: Math.round(loadTimings.portfolio_ms),
     recentSigs_ms: Math.round(loadTimings.recentSigs_ms),
     walletAgeScan_ms: Math.round(loadTimings.walletAgeScan_ms),
     parseTransactions_ms: Math.round(loadTimings.parseTransactions_ms),
@@ -908,6 +1160,8 @@ export async function assessWalletRisk(
     tier,
     reasons,
     wallet,
+    crossChainContext,
+    endpointRouting,
     analyzedAt: new Date().toISOString(),
   };
 }

@@ -47,6 +47,8 @@ Solana RPC for payment verification: Venum's execution-grade RPC (when configure
 Shipped tools call GoldRush **only** where it adds clear value:
 
 - **`BalanceService.getTokenBalancesForWalletAddress`** — powers portfolio structure and USD marks in **`assess_wallet_risk`** and **`score_counterparty_trust`** (concentration, long-tail, dust, counterparty stability cues).
+- **`SecurityService.getApprovals`** — powers **approval/spender risk** in **`assess_wallet_risk`**.
+- **`BalanceService.getHistoricalPortfolioForWalletAddress`** — powers **30-day portfolio trend/drawdown** scoring in **`assess_wallet_risk`**.
 - **`PricingService.getTokenPrices`** — **`trace_whale_activity`** uses it for USD notionals on whale movements (7-day window; last quoted point as spot).
 - **`BalanceService.getTokenHoldersV2ForTokenAddress`** (async iterator; we consume the **first** yielded page with `pageSize: 100`, `pageNumber: 0`) — **holder cross-check** vs Helius’s first-page unique-owner count when Covalent returns data.
 
@@ -67,7 +69,7 @@ Shipped tools call GoldRush **only** where it adds clear value:
 
 ### `assess_wallet_risk`
 
-One-line: Scores a Solana wallet from 0-100 using wallet age, concentration, transaction diversity, long-tail exposure, activity recency, and dust patterns.
+One-line: Scores a Solana wallet from 0-100 using wallet age, concentration, transaction diversity, long-tail exposure, activity recency, dust patterns, historical portfolio trend, and approval/spender risk.
 
 Price: `$0.02 USDC` per call
 
@@ -99,7 +101,7 @@ Good for: first-pass wallet due diligence before accepting transfers or routing 
 
 ### `trace_whale_activity`
 
-One-line: Analyzes top-holder behavior for a token, including concentration metrics, notable whale movements, and risk flags.
+One-line: Analyzes top-holder behavior for a token, including concentration metrics, notable whale movements, risk flags, and an optional live streaming snapshot of top-holder wallet activity.
 
 Price: `$0.01 USDC` per call
 
@@ -108,7 +110,9 @@ Input schema:
 ```json
 {
   "mint": "string (SPL mint base58)",
-  "windowHours": "number 1-72 (optional, default 24)"
+  "windowHours": "number 1-72 (optional, default 24)",
+  "liveMode": "boolean (optional, default false)",
+  "liveDurationSeconds": "number 3-20 (optional, default 6; used when liveMode=true)"
 }
 ```
 
@@ -141,7 +145,7 @@ Good for: monitoring token distribution and spotting holder-driven sell pressure
 
 ### `score_counterparty_trust`
 
-One-line: Scores transaction trust between two wallets using direct history, shared network overlap, behavior similarity, and counterparty stability.
+One-line: Scores transaction trust between two wallets using direct history, shared network overlap, behavior similarity, counterparty stability, and cross-chain activity context.
 
 Price: `$0.03 USDC` per call
 
@@ -311,6 +315,7 @@ Set these in `.env`:
 - `ANTHROPIC_API_KEY=...`
 - `MCPAY_KEYPAIR_PATH=./mcpay-agent.json`
 - `MCPAY_RECIPIENT_WALLET=<devnet pubkey>`
+- `VENUM_RPC_URL=https://your-venum-rpc-url` *(optional; falls back to public devnet RPC if unset)*
 
 ### Run the server locally
 
@@ -352,6 +357,8 @@ x402 keeps payments in the request/response loop instead of external account bil
 
 GoldRush provides structured balance and pricing data that is directly useful for risk and concentration scoring. It reduces normalization work and gives a clean base layer for portfolio-centric analytics.
 
+The project now also uses GoldRush endpoint-role-aware routing metadata (`primary` vs `specialized`) to make tool call selection more explicit and reduce accidental overuse of niche endpoints.
+
 #### Why Helius?
 
 Helius provides practical Solana transaction parsing and holder-level data that we need for movement and trust analysis. During development, GoldRush support for deep Solana transaction-history workflows was limited for our use case, so Helius fills that gap for parsed transaction and holder endpoints.
@@ -372,6 +379,8 @@ Helius provides practical Solana transaction parsing and holder-level data that 
 - Additional tools: token volatility scoring, contract risk assessment, social-graph counterparty scoring.
 - Streaming variants of `trace_whale_activity` for real-time monitoring.
 - Self-hostable facilitator option for teams that want to bypass PayAI-hosted settlement.
+- Optional GoldRush x402 discovery path for endpoint introspection (see `src/goldrush-x402.ts`; enable in demo via `ENABLE_GOLDRUSH_X402_DISCOVERY=1`).
+- Pipeline migration starter assets in `docs/goldrush-pipeline-playbook.md` and `docs/pipeline.example.yaml`.
 
 ## Credits & Acknowledgements
 

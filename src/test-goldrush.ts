@@ -125,6 +125,27 @@ async function testTokenHolders(): Promise<void> {
   }
 }
 
+async function testApprovals(): Promise<void> {
+  console.log("\n=== TEST 5: Token Approvals ===");
+  try {
+    const response = await client.SecurityService.getApprovals(CHAIN, TEST_WALLET);
+    if (response.error) {
+      console.error("API error:", response.error_message);
+      return;
+    }
+    const items = response.data?.items ?? [];
+    const spenderCount = items.reduce(
+      (sum, token) => sum + (token.spenders?.length ?? 0),
+      0
+    );
+    console.log(`Got ${items.length} token approval buckets / ${spenderCount} spenders`);
+    console.log("First approval item:");
+    console.log(safeJson(items[0]).slice(0, 800));
+  } catch (err) {
+    console.error(getErrorMessage(err));
+  }
+}
+
 async function main(): Promise<void> {
   console.log("Extended GoldRush Solana capability test\n");
   const solAddress = await testBalances();
@@ -133,6 +154,7 @@ async function main(): Promise<void> {
   }
   await testHistoricalPortfolio();
   await testTokenHolders();
+  await testApprovals();
   console.log("\n=== Done ===");
 }
 

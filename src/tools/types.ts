@@ -23,6 +23,21 @@ export const walletRiskOutputSchema = z.object({
   tier: riskTierSchema,
   reasons: z.array(walletRiskReasonSchema),
   wallet: z.string(),
+  crossChainContext: z
+    .object({
+      activeChains: z.number().int().min(0),
+      topChains: z.array(z.string()),
+      note: z.string(),
+    })
+    .nullable(),
+  endpointRouting: z.array(
+    z.object({
+      endpoint: z.string(),
+      role: z.enum(["primary", "specialized", "legacy"]),
+      selected: z.boolean(),
+      reason: z.string(),
+    })
+  ),
   analyzedAt: z.string(),
 });
 
@@ -50,6 +65,17 @@ export const whaleActivityToolInputShape = {
     .max(72)
     .optional()
     .describe("Lookback window in hours (default 24, max 72)"),
+  liveMode: z
+    .boolean()
+    .optional()
+    .describe("Enable short streaming snapshot for top-holder wallet activity"),
+  liveDurationSeconds: z.coerce
+    .number()
+    .int()
+    .min(3)
+    .max(20)
+    .optional()
+    .describe("Streaming snapshot duration in seconds (default 6, max 20)"),
 };
 
 export const whaleActivityInputSchema = z.object(whaleActivityToolInputShape);
@@ -96,6 +122,23 @@ export const whaleActivityOutputSchema = z.object({
   holderSourceReason: z.string(),
   /** Human-readable cautions when sources disagree or other caveats beyond holderSourceReason. */
   dataQualityNotes: z.array(z.string()),
+  endpointRouting: z.array(
+    z.object({
+      endpoint: z.string(),
+      role: z.enum(["primary", "specialized", "legacy"]),
+      selected: z.boolean(),
+      reason: z.string(),
+    })
+  ),
+  liveActivity: z
+    .object({
+      enabled: z.boolean(),
+      sampledWallets: z.array(z.string()),
+      sampledEvents: z.number().int().min(0),
+      durationSeconds: z.number().int().min(0),
+      note: z.string(),
+    })
+    .nullable(),
   topHolders: z.array(whaleActivityTopHolderSchema),
   notableMovements: z.array(whaleActivityMovementSchema),
   concentration: whaleActivityConcentrationSchema,
@@ -167,6 +210,22 @@ export const counterpartyTrustOutputSchema = z.object({
     sharedTxTypes: z.array(z.string()),
     activityOverlap: z.number(),
   }),
+  crossChainContext: z
+    .object({
+      walletAActiveChains: z.number().int().min(0),
+      walletBActiveChains: z.number().int().min(0),
+      sharedActiveChains: z.array(z.string()),
+      note: z.string(),
+    })
+    .nullable(),
+  endpointRouting: z.array(
+    z.object({
+      endpoint: z.string(),
+      role: z.enum(["primary", "specialized", "legacy"]),
+      selected: z.boolean(),
+      reason: z.string(),
+    })
+  ),
   redFlags: z.array(z.string()),
   positiveSignals: z.array(z.string()),
   reasons: z.array(counterpartyTrustReasonSchema),

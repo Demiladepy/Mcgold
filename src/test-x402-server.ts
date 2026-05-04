@@ -4,6 +4,8 @@ import { X402PaymentHandler } from "x402-solana/server";
 
 const PORT = 3100;
 const USDC_DEVNET_MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+const RPC_URL =
+  process.env.VENUM_RPC_URL?.trim() || "https://api.devnet.solana.com";
 
 function log(stage: string, data?: unknown): void {
   const ts = new Date().toISOString();
@@ -23,7 +25,7 @@ const x402 = new X402PaymentHandler({
   network: "solana-devnet",
   treasuryAddress,
   facilitatorUrl: "https://facilitator.payai.network",
-  rpcUrl: "https://api.devnet.solana.com",
+  rpcUrl: RPC_URL,
 });
 
 const app = express();

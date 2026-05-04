@@ -1,0 +1,31 @@
+pipeline:
+  name: mcgold-solana-surveillance
+  description: "Starter pipeline for whale/trust analytics"
+
+source:
+  chain: solana
+  topics:
+    - dex_trades
+    - spl_transfers
+    - wallet_positions
+
+transforms:
+  sql:
+    - name: filter_high_value_transfers
+      query: |
+        SELECT *
+        FROM spl_transfers
+        WHERE quote_usd > 1000
+
+destination:
+  type: clickhouse
+  host: ${CLICKHOUSE_HOST}
+  database: ${CLICKHOUSE_DB}
+  username: ${CLICKHOUSE_USER}
+  password: ${CLICKHOUSE_PASSWORD}
+  table_prefix: mcgold_
+
+delivery:
+  mode: at_least_once
+  batch_size: 500
+  flush_interval_seconds: 5

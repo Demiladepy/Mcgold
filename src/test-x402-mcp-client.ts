@@ -12,7 +12,8 @@ import { getAssociatedTokenAddress } from "@solana/spl-token";
 import { createX402Client } from "x402-solana/client";
 
 const TARGET_URL = process.env.MCP_SERVER_URL?.trim() || "http://localhost:3000/mcp";
-const RPC_URL = "https://api.devnet.solana.com";
+const RPC_URL =
+  process.env.VENUM_RPC_URL?.trim() || "https://api.devnet.solana.com";
 const USDC_DEVNET_MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
 const USDC_MAINNET_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const MCP_ACCEPT_HEADER = "application/json, text/event-stream";
@@ -384,6 +385,8 @@ async function main(): Promise<void> {
         arguments: {
           mint: USDC_MAINNET_MINT,
           windowHours: 24,
+          liveMode: true,
+          liveDurationSeconds: 6,
         },
       },
       true
@@ -410,6 +413,14 @@ async function main(): Promise<void> {
           holderSourceReason?: string;
           flags?: string[];
           dataQualityNotes?: string[];
+          endpointRouting?: Array<{ endpoint?: string; role?: string; selected?: boolean }>;
+          liveActivity?: {
+            enabled?: boolean;
+            sampledWallets?: string[];
+            sampledEvents?: number;
+            durationSeconds?: number;
+            note?: string;
+          } | null;
         };
         log("trace_whale_activity holder-source fields", {
           goldrushHolderCount: whale.goldrushHolderCount ?? null,
@@ -422,9 +433,71 @@ async function main(): Promise<void> {
           ),
           dataQualityNotes: whale.dataQualityNotes ?? [],
         });
+        log("trace_whale_activity phase2 fields", {
+          endpointRoutingCount: whale.endpointRouting?.length ?? 0,
+          hasLiveActivity: whale.liveActivity !== null && whale.liveActivity !== undefined,
+          liveSampledEvents: whale.liveActivity?.sampledEvents ?? null,
+          liveDurationSeconds: whale.liveActivity?.durationSeconds ?? null,
+        });
+        if (!Array.isArray(whale.endpointRouting) || whale.endpointRouting.length === 0) {
+          throw new Error("Phase2 assertion failed: trace_whale_activity missing endpointRouting");
+        }
+        if (!whale.liveActivity || whale.liveActivity.enabled !== true) {
+          throw new Error("Phase2 assertion failed: trace_whale_activity missing liveActivity");
+        }
       }
-    } catch {
-      log("trace_whale_activity holder-source parse skipped", {});
+    } catch (err) {
+      throw new Error(
+        `Phase2 assertion parse failed for trace_whale_activity: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+
+    lastStage = "paid_score_counterparty_trust_phase2_asserts";
+    log("score_counterparty_trust paid retry via x402 client (phase2 assertions)");
+    const trustCall = await rpcCall<unknown>(
+      "tools/call",
+      {
+        name: "score_counterparty_trust",
+        arguments: {
+          walletA: "4dHc2cag4hmVeMFuFHF2Gjc4BoUiKFFMCTGfiWmyMsvx",
+          walletB: "9sHdrUkpXAr4wQeKMh4RGKepDHX11RK5uZQoCmR5Y5zR",
+          lookbackDays: 90,
+        },
+      },
+      true
+    );
+    if (trustCall.error) {
+      throw new Error(
+        `Paid score_counterparty_trust RPC error (${trustCall.error.code}): ${trustCall.error.message}`
+      );
+    }
+    try {
+      const payload = trustCall.result as { content?: Array<{ text?: string }> };
+      const textPart = payload?.content?.find((c) => c.text)?.text;
+      if (textPart) {
+        const trust = JSON.parse(textPart) as {
+          crossChainContext?: {
+            walletAActiveChains?: number;
+            walletBActiveChains?: number;
+            sharedActiveChains?: string[];
+            note?: string;
+          } | null;
+          endpointRouting?: Array<{ endpoint?: string; role?: string; selected?: boolean }>;
+        };
+        log("score_counterparty_trust phase2 fields", {
+          hasCrossChainContext:
+            trust.crossChainContext !== null && trust.crossChainContext !== undefined,
+          endpointRoutingCount: trust.endpointRouting?.length ?? 0,
+          sharedActiveChains: trust.crossChainContext?.sharedActiveChains ?? [],
+        });
+        if (!Array.isArray(trust.endpointRouting) || trust.endpointRouting.length === 0) {
+          throw new Error("Phase2 assertion failed: score_counterparty_trust missing endpointRouting");
+        }
+      }
+    } catch (err) {
+      throw new Error(
+        `Phase2 assertion parse failed for score_counterparty_trust: ${err instanceof Error ? err.message : String(err)}`
+      );
     }
 
     log("payment submitted on devnet", {

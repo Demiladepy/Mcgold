@@ -1,7 +1,9 @@
-import { ChainName } from "@covalenthq/client-sdk";
+import { ChainName, StreamingChain } from "@covalenthq/client-sdk";
 import { PublicKey } from "@solana/web3.js";
 import { getCached, setCached } from "../cache.js";
 import { getGoldRushClient, getHeliusClient } from "../clients.js";
+import { withGoldRushRetry } from "../goldrush-retry.js";
+import { chooseEndpoint, type EndpointRoutingDecision } from "../goldrush-routing.js";
 import type {
   WhaleActivityInput,
   WhaleActivityOutput,
@@ -23,7 +25,7 @@ type ParsedTx = {
   tokenTransfers?: ParsedTokenTransfer[];
 };
 
-const CACHE_PREFIX = "whale-activity:v4:";
+const CACHE_PREFIX = "whale-activity:v5:";
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const HOLDER_FETCH_DELAY_MS = 150;
 const TOP_HOLDER_COUNT = 10;
@@ -201,6 +203,10 @@ async function fetchGoldRushHolderPageCount(mint: string): Promise<{
   /** Message for `holderSourceReason` when falling back to Helius-only (API error text or short note). */
   failureDetail: string | null;
 }> {
+  const route = chooseEndpoint(
+    "BalanceService.getTokenHoldersV2ForTokenAddress",
+    "holder_count_cross_check"
+  );
   try {
     const gr = getGoldRushClient();
     const iterable = gr.BalanceService.getTokenHoldersV2ForTokenAddress(
@@ -289,20 +295,20 @@ async function fetchMintMetadata(mint: string): Promise<{
 }
 
 async function fetchTokenUsdPrice(mint: string): Promise<number | null> {
+  const route = chooseEndpoint("PricingService.getTokenPrices", "usd_notional");
   try {
     const gr = getGoldRushClient();
     const to = new Date();
     const from = new Date();
     from.setDate(to.getDate() - 7);
-    const resp = await gr.PricingService.getTokenPrices(
-      ChainName.SOLANA_MAINNET,
-      "USD",
-      mint,
-      {
-        from: from.toISOString().slice(0, 10),
-        to: to.toISOString().slice(0, 10),
-        pricesAtAsc: true,
-      }
+    const resp = await withGoldRushRetry(
+      route.endpoint,
+      () =>
+        gr.PricingService.getTokenPrices(ChainName.SOLANA_MAINNET, "USD", mint, {
+          from: from.toISOString().slice(0, 10),
+          to: to.toISOString().slice(0, 10),
+          pricesAtAsc: true,
+        })
     );
     if (resp.error) {
       console.error("[trace-whale-activity] GoldRush pricing error", {
@@ -327,6 +333,65 @@ async function fetchTokenUsdPrice(mint: string): Promise<number | null> {
   }
 }
 
+async function captureLiveWalletActivity(
+  wallets: string[],
+  durationSeconds: number
+): Promise<{
+  enabled: boolean;
+  sampledWallets: string[];
+  sampledEvents: number;
+  durationSeconds: number;
+  note: string;
+}> {
+  if (wallets.length === 0) {
+    return {
+      enabled: true,
+      sampledWallets: [],
+      sampledEvents: 0,
+      durationSeconds,
+      note: "Live mode enabled but no wallets available for sampling.",
+    };
+  }
+  try {
+    const gr = getGoldRushClient();
+    let sampledEvents = 0;
+    const unsubscribe = gr.StreamingService.subscribeToWalletActivity(
+      {
+        chain_name: StreamingChain.SOLANA_MAINNET,
+        wallet_addresses: wallets,
+      },
+      {
+        next: (payload) => {
+          sampledEvents += payload?.length ?? 0;
+        },
+        error: (_err) => {
+          // Handled by zero-event summary.
+        },
+      }
+    );
+    await sleep(durationSeconds * 1000);
+    unsubscribe();
+    return {
+      enabled: true,
+      sampledWallets: wallets,
+      sampledEvents,
+      durationSeconds,
+      note:
+        sampledEvents > 0
+          ? `Captured ${sampledEvents} wallet-activity event(s) during live sample window.`
+          : "Live sample captured no wallet-activity events in the time window.",
+    };
+  } catch (err) {
+    return {
+      enabled: true,
+      sampledWallets: wallets,
+      sampledEvents: 0,
+      durationSeconds,
+      note: `Live streaming unavailable: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
 /**
  * Whale / top-holder activity for a Solana mint: holders, windowed movements, concentration, flags.
  */
@@ -336,10 +401,22 @@ export async function traceWhaleActivity(
   const t0 = performance.now();
   const mint = validateMint(input.mint);
   const windowHours = clampWindowHours(input.windowHours);
+  const liveMode = input.liveMode === true;
+  const liveDurationSeconds = Math.min(
+    20,
+    Math.max(3, Math.floor(input.liveDurationSeconds ?? 6))
+  );
   const windowStartSec = Math.floor(Date.now() / 1000) - windowHours * 3600;
+  const endpointRouting: EndpointRoutingDecision[] = [
+    chooseEndpoint("PricingService.getTokenPrices", "usd_notional"),
+    chooseEndpoint(
+      "BalanceService.getTokenHoldersV2ForTokenAddress",
+      "holder_count_cross_check"
+    ),
+  ];
 
   const cacheKey = `${CACHE_PREFIX}${mint}:${windowHours}`;
-  const cached = getCached<WhaleActivityOutput>(cacheKey);
+  const cached = liveMode ? null : getCached<WhaleActivityOutput>(cacheKey);
   if (cached) {
     const total_ms = Math.round(performance.now() - t0);
     console.log("[trace-whale-activity] timings", {
@@ -684,6 +761,11 @@ export async function traceWhaleActivity(
     flags.push("high_concentration");
   }
 
+  const liveWallets = topHolders.slice(0, 5).map((x) => x.wallet);
+  const liveActivity = liveMode
+    ? await captureLiveWalletActivity(liveWallets, liveDurationSeconds)
+    : null;
+
   if (top10HoldingPercent !== null && supplyUi !== null && supplyUi > 0) {
     let top3Ui = 0;
     for (const h of holdersRes.rows.slice(0, 3)) {
@@ -716,6 +798,8 @@ export async function traceWhaleActivity(
     holderSource,
     holderSourceReason,
     dataQualityNotes,
+    endpointRouting,
+    liveActivity,
     topHolders,
     notableMovements,
     concentration: {
@@ -726,7 +810,9 @@ export async function traceWhaleActivity(
     flags,
   };
 
-  setCached(cacheKey, out, CACHE_TTL_MS);
+  if (!liveMode) {
+    setCached(cacheKey, out, CACHE_TTL_MS);
+  }
 
   const total_ms = Math.round(performance.now() - t0);
   console.log("[trace-whale-activity] timings", {

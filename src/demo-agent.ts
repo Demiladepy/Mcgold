@@ -11,9 +11,11 @@ import {
 import bs58 from "bs58";
 import { getAssociatedTokenAddress } from "@solana/spl-token";
 import { createX402Client } from "x402-solana/client";
+import { listGoldRushX402Endpoints } from "./goldrush-x402.js";
 
 const DEFAULT_MCP_SERVER_URL = "https://mcgold.onrender.com/mcp";
-const RPC_URL = "https://api.devnet.solana.com";
+const RPC_URL =
+  process.env.VENUM_RPC_URL?.trim() || "https://api.devnet.solana.com";
 const USDC_DEVNET_MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
 const FACILITATOR_URL = "https://facilitator.payai.network";
 const MCP_ACCEPT_HEADER = "application/json, text/event-stream";
@@ -253,6 +255,16 @@ async function main(): Promise<void> {
   logAgent(`My wallet:    ${walletA}`);
   logAgent(`Alice wallet: ${walletB}`);
   logAgent(`MCP server:   ${mcpUrl}`);
+  if (process.env.ENABLE_GOLDRUSH_X402_DISCOVERY?.trim() === "1") {
+    try {
+      const endpoints = await listGoldRushX402Endpoints();
+      logAgent(`GoldRush x402 discovery endpoints found: ${endpoints.length}`);
+    } catch (err) {
+      logAgent(
+        `GoldRush x402 discovery unavailable: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
   println();
   await sleep(1000);
 
