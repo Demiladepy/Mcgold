@@ -10,7 +10,7 @@ Paid Solana intelligence tools for AI agents
 
 - 🌐 Live demo: [Live demo](https://mcgold.vercel.app)
 - 🔗 MCP server: [https://mcgold.onrender.com/mcp](https://mcgold.onrender.com/mcp) — *Note: first request may take 30–60s if the server has been idle (Render free tier cold start).*
-- 📺 Demo video: *Coming with submission* ([link will be added when the walkthrough is recorded](https://youtu.be/GV7QPQ3SwH8?si=W5ezn2PTO38510DM))
+- 📺 Demo video: (https://youtu.be/GV7QPQ3SwH8?si=W5ezn2PTO38510DM)
 
 ## What Is This
 
